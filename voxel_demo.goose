@@ -424,9 +424,12 @@ fn raycast_and_blast(grid: u8[>..]&, debris: Debris[>..]&,
 fn main() {
     guard gfx::open("A COOKED GOOSE // VOXEL DESTRUCTION", 1024, 680,
                     gfx::WINDOW_RESIZABLE) else {
-        write_stderr(str("gfx: ", gfx::error(), "\n"));
+        write_stderr(str("gfx::open failed: ", gfx::error(), "\n"));
         return;
     }
+    let init_size = gfx::screen_size();
+    write_stderr(str("voxel_demo: gfx opened (driver=", gfx::driver(),
+                     ", size=", init_size.x, "x", init_size.y, ")\n"));
 
     var cube_verts: Vertex[>..] = [];
     var cube_indices: u32[>..] = [];
@@ -472,13 +475,20 @@ fn main() {
     var desc = gfx::PipelineDesc { depth_test: true, depth_write: true };
     desc.formats[1] = gfx::VERTEX_UBYTE4_NORM;
     let pipeline = gfx::pipeline(vertex_shader, fragment_shader, desc);
-
-    var ctx = ui::create(16.0);
-    guard ctx.id != 0 else {
-        write_stderr(str("ui: ", ui::error(), "\n"));
+    guard pipeline.id != 0 else {
+        write_stderr(str("gfx::pipeline failed: ", gfx::error(), "\n"));
         gfx::close();
         return;
     }
+
+    var ctx = ui::create(16.0);
+    guard ctx.id != 0 else {
+        write_stderr(str("ui::create failed: ", ui::error(), "\n"));
+        gfx::release(pipeline);
+        gfx::close();
+        return;
+    }
+    write_stderr("voxel_demo: pipeline and ui ready, entering frame loop\n");
     let panel = ui::WINDOW_BORDER | ui::WINDOW_MOVABLE | ui::WINDOW_TITLE;
 
     var cam_pos = float3 { 0.0, 4.2, 9.5 };
