@@ -3,11 +3,11 @@ import gfx;
 import os;
 import ui;
 
-let GRID_X: i64 = 24;
-let GRID_Y: i64 = 16;
-let GRID_Z: i64 = 24;
-let GRID_N: i64 = 24 * 16 * 24;
-let VOXEL_SIZE: f32 = 0.45;
+let GRID_X: i64 = 36;
+let GRID_Y: i64 = 24;
+let GRID_Z: i64 = 36;
+let GRID_N: i64 = 36 * 24 * 36;
+let VOXEL_SIZE: f32 = 0.25;
 
 let MAT_AIR: u8 = 0;
 let MAT_GROUND: u8 = 1;
@@ -108,30 +108,31 @@ fn init_world(grid: u8[>..]&) {
         }
     }
 
-    // Main multi-story voxel building (x: 5..18, z: 5..18, y: 1..11)
-    for y in 1..12 {
-        for z in 5..19 {
-            for x in 5..19 {
-                let on_x_edge = x == 5 || x == 18;
-                let on_z_edge = z == 5 || z == 18;
+    // Main multi-story 25cm voxel building (x: 7..28, z: 7..28, y: 1..16)
+    for y in 1..17 {
+        for z in 7..29 {
+            for x in 7..29 {
+                let on_x_edge = x == 7 || x == 28;
+                let on_z_edge = z == 7 || z == 28;
                 let is_wall = on_x_edge || on_z_edge;
-                let is_floor_slab = y == 6 || y == 11;
+                let is_floor_slab = y == 8 || y == 16;
 
-                if y == 11 {
+                if y == 16 {
                     grid[idx(x, y, z)] = MAT_WOOD;
                 } else if is_floor_slab && !is_wall {
                     grid[idx(x, y, z)] = MAT_WOOD;
                 } else if is_wall {
-                    // Doorway on front (z == 18)
-                    if z == 18 && y >= 1 && y <= 3 && x >= 11 && x <= 12 {
+                    // Doorway on front (z == 28)
+                    if z == 28 && y >= 1 && y <= 5 && x >= 16 && x <= 19 {
                         continue;
                     }
-                    // Windows on walls
-                    if (y == 3 || y == 4 || y == 8 || y == 9) &&
-                       ((on_z_edge && (x == 8 || x == 9 || x == 14 || x == 15)) ||
-                        (on_x_edge && (z == 8 || z == 9 || z == 14 || z == 15))) {
+                    // Windows on walls (2 floors)
+                    let win_y = (y >= 4 && y <= 6) || (y >= 11 && y <= 13);
+                    let win_x = (x >= 11 && x <= 13) || (x >= 22 && x <= 24);
+                    let win_z = (z >= 11 && z <= 13) || (z >= 22 && z <= 24);
+                    if win_y && ((on_z_edge && win_x) || (on_x_edge && win_z)) {
                         grid[idx(x, y, z)] = MAT_GLASS;
-                    } else if (x == 5 || x == 18) && (z == 5 || z == 18) {
+                    } else if (x <= 8 || x >= 27) && (z <= 8 || z >= 27) {
                         grid[idx(x, y, z)] = MAT_CONCRETE;
                     } else {
                         grid[idx(x, y, z)] = MAT_BRICK;
@@ -141,14 +142,16 @@ fn init_world(grid: u8[>..]&) {
         }
     }
 
-    // Interior steel/gold core pillar + crates
-    for y in 1..11 {
-        grid[idx(11, y, 11)] = MAT_STEEL;
-        grid[idx(12, y, 11)] = MAT_STEEL;
+    // Interior steel/gold core pillars + crates
+    for y in 1..16 {
+        grid[idx(17, y, 17)] = MAT_STEEL;
+        grid[idx(18, y, 17)] = MAT_STEEL;
+        grid[idx(17, y, 18)] = MAT_STEEL;
+        grid[idx(18, y, 18)] = MAT_STEEL;
     }
-    for y in 1..3 {
-        for z in 7..9 {
-            for x in 7..9 {
+    for y in 1..4 {
+        for z in 10..13 {
+            for x in 10..13 {
                 grid[idx(x, y, z)] = MAT_WOOD;
             }
         }
@@ -495,7 +498,7 @@ fn main() {
     var yaw: f32 = 0.0;
     var pitch: f32 = -0.26;
     var mouse_captured = false;
-    var blast_radius: f32 = 1.15;
+    var blast_radius: f32 = 0.90;
     var blasts: i64 = 0;
     var debris: Debris[>..] = [];
 
@@ -561,9 +564,9 @@ fn main() {
             cam_pos.y = max(0.8, cam_pos.y - speed);
         }
 
-        if gfx::key_pressed("1") { blast_radius = 0.75; }
-        if gfx::key_pressed("2") { blast_radius = 1.15; }
-        if gfx::key_pressed("3") { blast_radius = 1.80; }
+        if gfx::key_pressed("1") { blast_radius = 0.55; }
+        if gfx::key_pressed("2") { blast_radius = 0.90; }
+        if gfx::key_pressed("3") { blast_radius = 1.45; }
 
         if gfx::key_pressed("R") {
             init_world(grid);
