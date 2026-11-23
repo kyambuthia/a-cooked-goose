@@ -12,11 +12,51 @@ const MAT_WOOD = 4;
 const MAT_GLASS = 5;
 const MAT_STEEL = 6;
 
+const TOOLS = [
+  { name: "Hammer", radius: 0.52, maxRange: 3.2, cost: 0, strength: 4.5 },
+  { name: "Pipe Bomb", radius: 0.95, maxRange: 28.0, cost: 1, strength: 6.5 },
+  { name: "C4", radius: 1.50, maxRange: 28.0, cost: 2, strength: 8.5 },
+];
+
 const canvas = document.getElementById("gl");
 const gl = canvas.getContext("webgl2", { antialias: true });
 if (!gl) {
   document.body.innerHTML = "<p style=\"padding:24px;color:#111\">WebGL2 not supported in this browser.</p>";
   throw new Error("WebGL2 not supported");
+}
+
+let audioCtx = null;
+function ensureAudio() {
+  if (!audioCtx && (window.AudioContext || window.webkitAudioContext)) {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  if (audioCtx && audioCtx.state === "suspended") audioCtx.resume();
+}
+function playTone(freq, dur, type = "sine", vol = 0.12, slide = 0) {
+  if (!audioCtx) return;
+  const t = audioCtx.currentTime;
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = type;
+  osc.frequency.setValueAtTime(freq, t);
+  if (slide !== 0) osc.frequency.exponentialRampToValueAtTime(Math.max(20, freq + slide), t + dur);
+  gain.gain.setValueAtTime(vol, t);
+  gain.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  osc.connect(gain).connect(audioCtx.destination);
+  osc.start(t);
+  osc.stop(t + dur);
+}
+function playBlastSfx(radius) {
+  playTone(radius > 1.2 ? 95 : 140, 0.25, "sawtooth", 0.16, -90);
+}
+function playPickupSfx() {
+  playTone(580, 0.10, "triangle", 0.14, 240);
+  setTimeout(() => playTone(880, 0.14, "triangle", 0.12, 180), 80);
+}
+function playWinSfx() {
+  playTone(523, 0.12, "triangle", 0.14, 0);
+  setTimeout(() => playTone(659, 0.12, "triangle", 0.14, 0), 110);
+  setTimeout(() => playTone(784, 0.22, "triangle", 0.16, 0), 220);
 }
 
 const vsSource = `#version 300 es
@@ -43,9 +83,7 @@ function compileShader(type, src) {
   const s = gl.createShader(type);
   gl.shaderSource(s, src);
   gl.compileShader(s);
-  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
-    throw new Error(gl.getShaderInfoLog(s));
-  }
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
   return s;
 }
 
@@ -53,15 +91,12 @@ const prog = gl.createProgram();
 gl.attachShader(prog, compileShader(gl.VERTEX_SHADER, vsSource));
 gl.attachShader(prog, compileShader(gl.FRAGMENT_SHADER, fsSource));
 gl.linkProgram(prog);
-if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
-  throw new Error(gl.getProgramInfoLog(prog));
-}
+if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
 
 const uModel = gl.getUniformLocation(prog, "u_model");
 const uViewProj = gl.getUniformLocation(prog, "u_view_proj");
 const uTint = gl.getUniformLocation(prog, "u_tint");
 
-// Minimal column-major mat4 helpers
 function mat4Identity() {
   return new Float32Array([1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]);
 }
@@ -102,7 +137,7 @@ function mat4LookAt(eye, target, up) {
     1
   ]);
 }
-function mat4TRS(pos, axis, angle, scale) {
+function mat4TRS(pos, axis, angle, sx, sy = sx, sz = sx) {
   let [ax, ay, az] = axis;
   const al = Math.hypot(ax, ay, az) || 1;
   ax /= al; ay /= al; az /= al;
@@ -111,9 +146,9 @@ function mat4TRS(pos, axis, angle, scale) {
   const r10 = t*ax*ay - s*az, r11 = t*ay*ay + c,    r12 = t*ay*az + s*ax;
   const r20 = t*ax*az + s*ay, r21 = t*ay*az - s*ax, r22 = t*az*az + c;
   return new Float32Array([
-    r00*scale, r01*scale, r02*scale, 0,
-    r10*scale, r11*scale, r12*scale, 0,
-    r20*scale, r21*scale, r22*scale, 0,
+    r00*sx, r01*sx, r02*sx, 0,
+    r10*sy, r11*sy, r12*sy, 0,
+    r20*sz, r21*sz, r22*sz, 0,
     pos[0], pos[1], pos[2], 1
   ]);
 }
@@ -357,12 +392,12 @@ function detachUnsupported(blastCenter) {
   }
 }
 
-function raycastAndBlast(origin, dir, radius) {
+function raycastAndBlast(origin, dir, tool) {
   const halfX = GRID_X * 0.5 * VOXEL_SIZE;
   const halfZ = GRID_Z * 0.5 * VOXEL_SIZE;
   const step = VOXEL_SIZE * 0.35;
   let hitPos = null;
-  for (let dist = 0.2; dist < 32.0; dist += step) {
+  for (let dist = 0.2; dist < tool.maxRange; dist += step) {
     const p = [origin[0] + dir[0]*dist, origin[1] + dir[1]*dist, origin[2] + dir[2]*dist];
     const gx = Math.floor((p[0] + halfX) / VOXEL_SIZE);
     const gy = Math.floor(p[1] / VOXEL_SIZE);
@@ -374,7 +409,7 @@ function raycastAndBlast(origin, dir, radius) {
   }
   if (!hitPos) return false;
 
-  const r2 = radius * radius;
+  const r2 = tool.radius * tool.radius;
   let carved = 0;
   for (let y = 1; y < GRID_Y; y++) {
     for (let z = 0; z < GRID_Z; z++) {
@@ -382,12 +417,13 @@ function raycastAndBlast(origin, dir, radius) {
         const i = idx(x, y, z);
         const mat = grid[i];
         if (mat === MAT_AIR) continue;
+        if (mat === MAT_STEEL && tool.cost === 0) continue;
         const wp = voxelWorldPos(x, y, z);
         const dx = wp[0] - hitPos[0], dy = wp[1] - hitPos[1], dz = wp[2] - hitPos[2];
         if (dx*dx + dy*dy + dz*dz <= r2) {
           grid[i] = MAT_AIR;
           carved++;
-          if ((carved & 1) === 0) spawnDebris(wp, hitPos, mat, x, y, z, 6.5);
+          if ((carved & 1) === 0) spawnDebris(wp, hitPos, mat, x, y, z, tool.strength);
         }
       }
     }
@@ -395,22 +431,52 @@ function raycastAndBlast(origin, dir, radius) {
   if (carved > 0) {
     detachUnsupported(hitPos);
     rebuildWorldMesh();
+    playBlastSfx(tool.radius);
     return true;
   }
   return false;
 }
 
-const camPos = [0, 4.2, 9.5];
-let yaw = 0, pitch = -0.26;
-let blastRadius = 0.90;
-let blasts = 0;
+let camPos = [0, 1.3, 4.2];
+let yaw = 0, pitch = 0.05;
+let selectedTool = 1;
+let charges = 10;
+let phase = "plan";
+let timeLeft = 45.0;
+let alarmBeepAccum = 0;
 const keys = new Set();
 
-function resetWorld() {
+const targets = [];
+const escapePad = [0, 0.32, 3.85];
+
+const bannerEl = document.getElementById("banner");
+const bannerTitleEl = document.getElementById("banner-title");
+const bannerSubEl = document.getElementById("banner-sub");
+const timerBoxEl = document.getElementById("timer-box");
+const phaseLabelEl = document.getElementById("phase-label");
+const timerValEl = document.getElementById("timer-val");
+
+function resetGame() {
   initWorld();
   debris.length = 0;
-  blasts = 0;
   rebuildWorldMesh();
+  camPos = [0, 1.3, 4.2];
+  yaw = 0;
+  pitch = 0.05;
+  charges = 10;
+  phase = "plan";
+  timeLeft = 45.0;
+  alarmBeepAccum = 0;
+  targets.length = 0;
+  targets.push(
+    { pos: [-1.4, 0.85, -1.4], collected: false },
+    { pos: [1.5, 2.55, -1.3], collected: false },
+    { pos: [0.0, 4.55, 0.0], collected: false }
+  );
+  bannerEl.style.display = "none";
+  timerBoxEl.className = "";
+  phaseLabelEl.textContent = "PLANNING PHASE";
+  timerValEl.textContent = "45.0s";
 }
 
 function getForward() {
@@ -418,33 +484,43 @@ function getForward() {
   return [-Math.sin(yaw) * cp, Math.sin(pitch), -Math.cos(yaw) * cp];
 }
 
-function doBlast() {
-  if (raycastAndBlast(camPos, getForward(), blastRadius)) blasts++;
+function useTool() {
+  if (phase === "won" || phase === "lost") return;
+  ensureAudio();
+  const tool = TOOLS[selectedTool];
+  if (charges < tool.cost) {
+    playTone(180, 0.1, "square", 0.08, -40);
+    return;
+  }
+  if (raycastAndBlast(camPos, getForward(), tool)) {
+    charges -= tool.cost;
+  }
 }
 
-function setRadius(r) {
-  blastRadius = r;
-  document.querySelectorAll("#bar button[data-r]").forEach((b) => {
-    b.classList.toggle("active", parseFloat(b.dataset.r) === r);
+function setTool(idxTool) {
+  selectedTool = idxTool;
+  document.querySelectorAll("#bar button[data-tool]").forEach((b) => {
+    b.classList.toggle("active", parseInt(b.dataset.tool, 10) === idxTool);
   });
 }
 
 window.addEventListener("keydown", (e) => {
   keys.add(e.code);
-  if (e.code === "Digit1") setRadius(0.55);
-  if (e.code === "Digit2") setRadius(0.90);
-  if (e.code === "Digit3") setRadius(1.45);
-  if (e.code === "KeyF") doBlast();
-  if (e.code === "KeyR") resetWorld();
+  if (e.code === "Digit1") setTool(0);
+  if (e.code === "Digit2") setTool(1);
+  if (e.code === "Digit3") setTool(2);
+  if (e.code === "KeyF") useTool();
+  if (e.code === "KeyR") resetGame();
 });
 window.addEventListener("keyup", (e) => keys.delete(e.code));
 
 canvas.addEventListener("mousedown", (e) => {
   if (e.button !== 0) return;
+  ensureAudio();
   if (document.pointerLockElement !== canvas) {
     canvas.requestPointerLock?.();
   } else {
-    doBlast();
+    useTool();
   }
 });
 
@@ -455,11 +531,12 @@ window.addEventListener("mousemove", (e) => {
   }
 });
 
-document.querySelectorAll("#bar button[data-r]").forEach((btn) => {
-  btn.addEventListener("click", () => setRadius(parseFloat(btn.dataset.r)));
+document.querySelectorAll("#bar button[data-tool]").forEach((btn) => {
+  btn.addEventListener("click", () => setTool(parseInt(btn.dataset.tool, 10)));
 });
-document.getElementById("btn-blast").addEventListener("click", doBlast);
-document.getElementById("btn-reset").addEventListener("click", resetWorld);
+document.getElementById("btn-blast").addEventListener("click", useTool);
+document.getElementById("btn-reset").addEventListener("click", resetGame);
+document.getElementById("banner-restart").addEventListener("click", resetGame);
 
 function resize() {
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -470,10 +547,10 @@ function resize() {
 window.addEventListener("resize", resize);
 resize();
 
-resetWorld();
+resetGame();
 
+const objEl = document.getElementById("obj-info");
 const statsEl = document.getElementById("stats");
-const blastEl = document.getElementById("blast-info");
 const identity = mat4Identity();
 let lastTime = performance.now();
 let fpsSmooth = 60;
@@ -483,15 +560,71 @@ function frame(now) {
   lastTime = now;
   if (dt > 0) fpsSmooth = fpsSmooth * 0.9 + (1 / dt) * 0.1;
 
-  const fwd = getForward();
-  const right = [Math.cos(yaw), 0, -Math.sin(yaw)];
-  const speed = 5.5 * dt;
-  if (keys.has("KeyW")) { camPos[0]+=fwd[0]*speed; camPos[1]+=fwd[1]*speed; camPos[2]+=fwd[2]*speed; }
-  if (keys.has("KeyS")) { camPos[0]-=fwd[0]*speed; camPos[1]-=fwd[1]*speed; camPos[2]-=fwd[2]*speed; }
-  if (keys.has("KeyD")) { camPos[0]+=right[0]*speed; camPos[2]+=right[2]*speed; }
-  if (keys.has("KeyA")) { camPos[0]-=right[0]*speed; camPos[2]-=right[2]*speed; }
-  if (keys.has("Space") || keys.has("KeyE")) camPos[1] += speed;
-  if (keys.has("KeyC") || keys.has("KeyQ")) camPos[1] = Math.max(0.8, camPos[1] - speed);
+  if (phase !== "won" && phase !== "lost") {
+    const fwd = getForward();
+    const right = [Math.cos(yaw), 0, -Math.sin(yaw)];
+    const speed = 5.5 * dt;
+    if (keys.has("KeyW")) { camPos[0]+=fwd[0]*speed; camPos[1]+=fwd[1]*speed; camPos[2]+=fwd[2]*speed; }
+    if (keys.has("KeyS")) { camPos[0]-=fwd[0]*speed; camPos[1]-=fwd[1]*speed; camPos[2]-=fwd[2]*speed; }
+    if (keys.has("KeyD")) { camPos[0]+=right[0]*speed; camPos[2]+=right[2]*speed; }
+    if (keys.has("KeyA")) { camPos[0]-=right[0]*speed; camPos[2]-=right[2]*speed; }
+    if (keys.has("Space") || keys.has("KeyE")) camPos[1] += speed;
+    if (keys.has("KeyC") || keys.has("KeyQ")) camPos[1] = Math.max(0.75, camPos[1] - speed);
+    camPos[1] = Math.max(0.75, camPos[1]);
+
+    let collectedCount = 0;
+    for (const t of targets) {
+      if (!t.collected) {
+        const d = Math.hypot(camPos[0] - t.pos[0], camPos[1] - t.pos[1], camPos[2] - t.pos[2]);
+        if (d < 1.15) {
+          t.collected = true;
+          charges += 1;
+          playPickupSfx();
+          if (phase === "plan") {
+            phase = "alarm";
+            timerBoxEl.className = "alarm";
+            phaseLabelEl.textContent = "ALARM! GRAB ALL TARGETS";
+          }
+        }
+      }
+      if (t.collected) collectedCount++;
+    }
+    if (collectedCount === targets.length && phase === "alarm") {
+      phase = "escape";
+      phaseLabelEl.textContent = "ESCAPE TO GREEN PAD!";
+    }
+
+    if (phase === "alarm" || phase === "escape") {
+      timeLeft -= dt;
+      alarmBeepAccum += dt;
+      if (alarmBeepAccum >= 1.0) {
+        alarmBeepAccum -= 1.0;
+        playTone(timeLeft < 10 ? 920 : 640, 0.06, "square", 0.05, 0);
+      }
+      timerValEl.textContent = `${Math.max(0, timeLeft).toFixed(1)}s`;
+      if (timeLeft <= 0) {
+        phase = "lost";
+        document.exitPointerLock?.();
+        bannerTitleEl.textContent = "TIME IS UP";
+        bannerSubEl.textContent = `Collected ${collectedCount} / ${targets.length} targets.`;
+        bannerEl.style.display = "block";
+      }
+    }
+
+    if (phase === "escape") {
+      const ed = Math.hypot(camPos[0] - escapePad[0], camPos[1] - escapePad[1], camPos[2] - escapePad[2]);
+      if (ed < 1.35) {
+        phase = "won";
+        timerBoxEl.className = "win";
+        phaseLabelEl.textContent = "ESCAPED!";
+        document.exitPointerLock?.();
+        playWinSfx();
+        bannerTitleEl.textContent = "MISSION COMPLETE";
+        bannerSubEl.textContent = `Escaped with ${timeLeft.toFixed(1)}s remaining!`;
+        bannerEl.style.display = "block";
+      }
+    }
+  }
 
   for (let i = 0; i < debris.length;) {
     const d = debris[i];
@@ -522,6 +655,7 @@ function frame(now) {
   gl.enable(gl.DEPTH_TEST);
   gl.enable(gl.CULL_FACE);
 
+  const fwd = getForward();
   const aspect = canvas.width / Math.max(canvas.height, 1);
   const view = mat4LookAt(camPos, [camPos[0]+fwd[0], camPos[1]+fwd[1], camPos[2]+fwd[2]], [0, 1, 0]);
   const proj = mat4Perspective(1.05, aspect, 0.1, 100.0);
@@ -537,17 +671,34 @@ function frame(now) {
     gl.drawElements(gl.TRIANGLES, worldMesh.count, gl.UNSIGNED_INT, 0);
   }
 
-  if (debris.length > 0) {
-    gl.bindVertexArray(cubeMesh.vao);
-    for (const d of debris) {
-      gl.uniformMatrix4fv(uModel, false, mat4TRS(d.pos, d.axis, d.angle, d.scale));
-      gl.uniform4f(uTint, d.color[0]/255, d.color[1]/255, d.color[2]/255, 1);
-      gl.drawElements(gl.TRIANGLES, cubeMesh.count, gl.UNSIGNED_INT, 0);
-    }
+  gl.bindVertexArray(cubeMesh.vao);
+
+  const spinT = now * 0.0025;
+  for (const t of targets) {
+    if (t.collected) continue;
+    const bob = Math.sin(spinT * 1.4) * 0.1;
+    gl.uniformMatrix4fv(uModel, false, mat4TRS([t.pos[0], t.pos[1] + bob, t.pos[2]], [0.4, 1, 0.2], spinT, 0.42));
+    gl.uniform4f(uTint, 1.0, 0.84, 0.18, 1.0);
+    gl.drawElements(gl.TRIANGLES, cubeMesh.count, gl.UNSIGNED_INT, 0);
   }
 
+  gl.uniformMatrix4fv(uModel, false, mat4TRS(escapePad, [0, 1, 0], 0, 1.35, 0.12, 1.35));
+  if (phase === "escape" || phase === "won") {
+    gl.uniform4f(uTint, 0.22, 0.95, 0.45, 1.0);
+  } else {
+    gl.uniform4f(uTint, 0.18, 0.48, 0.30, 1.0);
+  }
+  gl.drawElements(gl.TRIANGLES, cubeMesh.count, gl.UNSIGNED_INT, 0);
+
+  for (const d of debris) {
+    gl.uniformMatrix4fv(uModel, false, mat4TRS(d.pos, d.axis, d.angle, d.scale));
+    gl.uniform4f(uTint, d.color[0]/255, d.color[1]/255, d.color[2]/255, 1);
+    gl.drawElements(gl.TRIANGLES, cubeMesh.count, gl.UNSIGNED_INT, 0);
+  }
+
+  const collected = targets.filter((t) => t.collected).length;
+  objEl.textContent = `TARGETS: ${collected} / ${targets.length}  |  CHARGES: ${charges}`;
   statsEl.textContent = `VOXELS: ${voxelCount} | DEBRIS: ${debris.length} | FPS: ${Math.round(fpsSmooth)}`;
-  blastEl.textContent = `BLASTS: ${blasts} | RADIUS: ${blastRadius.toFixed(2)}`;
   requestAnimationFrame(frame);
 }
 
