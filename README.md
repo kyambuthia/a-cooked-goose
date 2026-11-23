@@ -1,57 +1,49 @@
-# Goose Starter
+# a-cooked-goose
 
-A small starter repository for the [Goose programming language](https://aardappel.github.io/goose/).
+Technical architecture and design notes for a voxel-based destructible physics and raytracing game engine.
 
-## Run
+---
 
-With Goose on your `PATH`, run the example directly:
+## 1. World Representation: Multi-Volume Voxel Architecture
 
-```sh
-goose hello.goose
-```
+Instead of storing the entire level inside a single monolithic 3D grid, the world is partitioned into **thousands of independent, movable voxel volumes**:
 
-To build a native executable:
+- **Local Rectilinear Grids:** Inside each volume, voxels are arranged on a dense, axis-aligned orthogonal grid (~10 cm per voxel).
+- **Arbitrary World Transforms:** Each volume carries its own position and orientation, allowing props, vehicles, doors, and detached debris to translate and rotate freely in 3D space.
+- **Dynamic Splitting:** When impacts or explosions carve voxels out of a structure, disconnected clusters split off from the parent volume and spawn as new, independently simulated rigid-body voxel objects.
 
-```sh
-goose build hello.goose
-./hello
-```
+---
 
-## Open a window
+## 2. Direct Voxel Raytracing Pipeline
 
-Run the resizable graphics window:
+Aside from a few auxiliary elements (e.g., water surfaces and cables), the renderer does **not** convert voxels into triangle meshes:
 
-```sh
-goose window.goose
-```
+- **Screen-Space / Compute Raycasting:** Primary visibility, shadows, and reflections are evaluated directly against voxel volumes in fragment/compute shaders without hardware RT cores.
+- **3D DDA Traversal:** Rays step through local voxel grids using a modified **Digital Differential Analysis (DDA)** raymarching algorithm.
+- **Mipmap Occupancy Acceleration:** Each volume maintains lower-resolution occupancy mipmaps (hierarchical empty-space skipping) so rays leap across empty regions rather than stepping voxel-by-voxel.
+- **Lighting & Volumetrics:**
+  - **Soft Shadows & AO:** Raycast occlusion against 10 cm voxel geometry updates immediately as walls and roofs are breached.
+  - **Real-Time Global Illumination:** Secondary light bounces are approximated via stochastic ray sampling and irradiance probes.
+  - **Reflections & Participating Media:** Smooth surfaces reflect voxel geometry directly, while smoke, dust, and fire integrate into the raymarch loop for volumetric scattering.
 
-Press Escape or close the window to quit.
+---
 
-## PS1-era graphics demo
+## 3. Physics, Collisions & Structural Integrity
 
-Run the low-poly scene with a checkerboard floor, 15-bit color quantization,
-ordered dithering, and scanlines:
+- **CPU Voxel-vs-Voxel Collision:** Collision detection evaluates overlapping voxel grids directly on the CPU rather than relying on simplified convex hulls, paired with custom rigid-body constraint solvers, broad-phase culling, and body sleeping.
+- **Material Metadata:** Each voxel stores material attributes (e.g., wood, concrete, metal, glass, plastic) that govern mass, blast/impact resistance, flammability, and impact audio.
+- **Connectivity & Collapse:** After voxels are removed, a structural connectivity pass checks whether remaining clusters still have a supported path to static ground/bedrock. Unsupported sections automatically detach into dynamic falling bodies under gravity.
 
-```sh
-export DEEPSEEK_API_KEY="your-deepseek-api-key"
-# Optional; defaults to deepseek-flash
-export DEEPSEEK_MODEL="deepseek-flash"
-goose ps1_demo.goose
-```
+---
 
-Click the scene to capture the mouse; move it to look around, and press Tab to release or recapture.
-Use WASD to pan, Left/Right to rotate, Space to pause, and Escape to quit.
-Enter or Send submits your prompt to the selected model. The model can change the scene mood,
-rotation speed, and camera distance. The prompt bar stays at the bottom of the game window.
+## 4. Core Gameplay Loop
 
-To use the model controlled prompt bar, players need an API key and an account with a model
-provider. This demo currently supports DeepSeek's API, so create a key with
-[DeepSeek](https://platform.deepseek.com/),
-keep it in `DEEPSEEK_API_KEY`, and have `curl` and a C compiler installed. The model bridge
-currently supports Linux and macOS. The supported models
-are `deepseek-flash` (default) and `deepseek-v4-pro`; set `DEEPSEEK_MODEL` to choose one. Each
-prompt is sent to DeepSeek over HTTPS and may incur provider charges. Avoid entering private or
-sensitive information. See the [DeepSeek API quickstart](https://api-docs.deepseek.com/quick_start/agent_integrations/)
-for provider details.
+1. **Recon & Preparation:** Unlimited setup phase to scout the level, carve shortcuts through walls, build ramps, position vehicles, and stage routes.
+2. **Timed Execution:** Triggering the first objective starts a countdown alarm, turning the prepared environment into a high-speed traversal run through the player-modified geometry.
 
-See the [Goose tutorial](https://aardappel.github.io/goose/tutorial/) and [language reference](https://aardappel.github.io/goose/reference/) for more.
+---
+
+## 5. Assets & Scripting
+
+- **Voxel Models (`.vox`):** Static structures, props, and vehicles are authored as palette-indexed 3D voxel grids (MagicaVoxel `.vox` format) and composed into levels via scene manifests.
+- **Embedded Scripting:** Gameplay rules, custom tools, procedural voxel generation, HUD rendering, and networked state sync run through lightweight lifecycle hooks (`init`, `tick`, fixed-step `update`, `draw`).
