@@ -48,12 +48,12 @@ fn in_bounds(x: i64, y: i64, z: i64) -> bool {
 }
 
 fn voxel_world_pos(x: i64, y: i64, z: i64) -> float3 {
-    let half_x = (GRID_X as f32) * 0.5 * VOXEL_SIZE;
-    let half_z = (GRID_Z as f32) * 0.5 * VOXEL_SIZE;
+    let half_x = GRID_X * 0.5 * VOXEL_SIZE;
+    let half_z = GRID_Z * 0.5 * VOXEL_SIZE;
     return float3 {
-        (x as f32 + 0.5) * VOXEL_SIZE - half_x,
-        (y as f32 + 0.5) * VOXEL_SIZE,
-        (z as f32 + 0.5) * VOXEL_SIZE - half_z
+        (x + 0.5) * VOXEL_SIZE - half_x,
+        (y + 0.5) * VOXEL_SIZE,
+        (z + 0.5) * VOXEL_SIZE - half_z
     };
 }
 
@@ -209,8 +209,8 @@ fn rebuild_mesh(grid: const u8[:], verts: Vertex[>..]&, indices: u32[>..]&,
     indices.resize(0);
     voxel_count = 0;
 
-    let half_x = (GRID_X as f32) * 0.5 * VOXEL_SIZE;
-    let half_z = (GRID_Z as f32) * 0.5 * VOXEL_SIZE;
+    let half_x = GRID_X * 0.5 * VOXEL_SIZE;
+    let half_z = GRID_Z * 0.5 * VOXEL_SIZE;
 
     for y in GRID_Y {
         for z in GRID_Z {
@@ -219,11 +219,11 @@ fn rebuild_mesh(grid: const u8[:], verts: Vertex[>..]&, indices: u32[>..]&,
                 if mat == MAT_AIR { continue; }
                 voxel_count += 1;
 
-                let x0 = (x as f32) * VOXEL_SIZE - half_x;
+                let x0 = x * VOXEL_SIZE - half_x;
                 let x1 = x0 + VOXEL_SIZE;
-                let y0 = (y as f32) * VOXEL_SIZE;
+                let y0 = y * VOXEL_SIZE;
                 let y1 = y0 + VOXEL_SIZE;
-                let z0 = (z as f32) * VOXEL_SIZE - half_z;
+                let z0 = z * VOXEL_SIZE - half_z;
                 let z1 = z0 + VOXEL_SIZE;
 
                 // +Y
@@ -276,21 +276,21 @@ fn rebuild_mesh(grid: const u8[:], verts: Vertex[>..]&, indices: u32[>..]&,
 fn spawn_debris(debris: Debris[>..]&, pos: float3, center: float3, mat: u8,
                 x: i64, y: i64, z: i64, strength: f32) {
     if debris.len >= 256 { return; }
-    let dx = pos.x - center.x + (((x * 17 + z * 31) & 7) as f32 - 3.5) * 0.05;
+    let dx = pos.x - center.x + (((x * 17 + z * 31) & 7) - 3.5) * 0.05;
     let dy = pos.y - center.y + 0.35;
-    let dz = pos.z - center.z + (((z * 23 + y * 11) & 7) as f32 - 3.5) * 0.05;
+    let dz = pos.z - center.z + (((z * 23 + y * 11) & 7) - 3.5) * 0.05;
     let len = max(0.1, sqrt(dx * dx + dy * dy + dz * dz));
-    let speed = strength * (0.7 + ((x + y + z) & 3) as f32 * 0.2);
+    let speed = strength * (0.7 + ((x + y + z) & 3) * 0.2);
 
     debris.push(Debris {
         pos: pos,
         vel: float3 { dx / len * speed, dy / len * speed + 2.2, dz / len * speed },
         angle: 0.0,
-        spin: 4.0 + ((x * 5 + y * 3) & 7) as f32,
+        spin: 4.0 + ((x * 5 + y * 3) & 7),
         axis: float3 {
-            0.3 + ((x & 3) as f32) * 0.2,
-            0.5 + ((y & 3) as f32) * 0.2,
-            0.2 + ((z & 3) as f32) * 0.2
+            0.3 + (x & 3) * 0.2,
+            0.5 + (y & 3) * 0.2,
+            0.2 + (z & 3) * 0.2
         },
         scale: VOXEL_SIZE * 0.85,
         color: mat_color(mat, 0.95, x, y, z),
@@ -365,8 +365,8 @@ fn detach_unsupported(grid: u8[>..]&, debris: Debris[>..]&, blast_center: float3
 
 fn raycast_and_blast(grid: u8[>..]&, debris: Debris[>..]&,
                      origin: float3, dir: float3, radius: f32) -> bool {
-    let half_x = (GRID_X as f32) * 0.5 * VOXEL_SIZE;
-    let half_z = (GRID_Z as f32) * 0.5 * VOXEL_SIZE;
+    let half_x = GRID_X * 0.5 * VOXEL_SIZE;
+    let half_z = GRID_Z * 0.5 * VOXEL_SIZE;
     let step: f32 = VOXEL_SIZE * 0.35;
     var dist: f32 = 0.2;
     var hit = false;
@@ -668,9 +668,9 @@ fn main() {
                                  gfx::mul(gfx::rotate(d.axis, d.angle),
                                           gfx::scale(float3 { d.scale, d.scale, d.scale })));
                 let tint = float4 {
-                    (d.color[0] as f32) / 255.0,
-                    (d.color[1] as f32) / 255.0,
-                    (d.color[2] as f32) / 255.0,
+                    d.color[0] / 255.0,
+                    d.color[1] / 255.0,
+                    d.color[2] / 255.0,
                     1.0
                 };
                 gfx::uniforms(gfx::VERTEX, 0, Transform {
